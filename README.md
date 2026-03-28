@@ -39,14 +39,13 @@ pip install -r requirements.txt
 
 ## Step 3 — Configure the bot
 
-Edit `cooking_bot.py` and fill in the top section:
+Copy the example env file and edit it (this file is gitignored):
 
-```python
-TELEGRAM_TOKEN    = "your_telegram_token_here"
-ANTHROPIC_API_KEY = "your_anthropic_key_here"
-YOUR_CHAT_ID      = 123456789        # your numeric chat ID
-MORNING_TIME      = "08:00"          # when to send the daily prompt
+```bash
+cp .env.example .env
 ```
+
+Set `TELEGRAM_TOKEN`, `ANTHROPIC_API_KEY`, and `TELEGRAM_CHAT_ID` (your numeric chat ID). Optional: in `cooking_bot.py`, adjust `MORNING_TIME` and `RECIPES_DIR` if needed.
 
 ---
 
@@ -67,6 +66,8 @@ Open Telegram, find your bot, and send `/start`. You should see the menu appear.
 mkdir -p ~/cooking_bot
 cp cooking_bot.py ~/cooking_bot/
 cp requirements.txt ~/cooking_bot/
+cp .env.example ~/cooking_bot/
+# Create ~/cooking_bot/.env with your secrets (see Step 3)
 
 # Create a venv inside the runtime folder
 cd ~/cooking_bot
@@ -116,6 +117,6 @@ Recipes are saved to `~/recipes/` as `.md` files — plain text you can read, ed
 
 **Bot doesn't respond** → Check the token in the config and that the bot is running (`systemctl status cooking_bot`)
 
-**Morning message not arriving** → Make sure `YOUR_CHAT_ID` is set correctly (must be an integer, not a string)
+**Morning message not arriving** → Make sure `TELEGRAM_CHAT_ID` in `.env` is correct (digits only, no quotes)
 
 **Recipe not saving** → Make sure `~/recipes/` exists and is writable (`mkdir -p ~/recipes`)
