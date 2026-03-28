@@ -11,6 +11,7 @@ import os
 import re
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import asyncio
 import schedule
 import time
@@ -39,14 +40,26 @@ RECIPES_DIR      = Path("/home/adair/recipes")
 MORNING_TIME     = "10:00"    # 24h format, local time
 # ─────────────────────────────────────────────
 
+_log_path = Path(os.getenv("BOT_LOG_FILE", str(BASE_DIR / "cooking_bot.log")))
+_log_max_bytes = int(os.getenv("BOT_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+_log_backups = int(os.getenv("BOT_LOG_BACKUP_COUNT", "3"))
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
     handlers=[
-        logging.FileHandler(Path(os.getenv("BOT_LOG_FILE", str(BASE_DIR / "cooking_bot.log")))),
-        logging.StreamHandler()
-    ]
+        RotatingFileHandler(
+            _log_path,
+            maxBytes=max(_log_max_bytes, 256 * 1024),
+            backupCount=max(_log_backups, 1),
+            encoding="utf-8",
+        ),
+        logging.StreamHandler(),
+    ],
 )
+for _quiet in ("httpx", "httpcore"):
+    logging.getLogger(_quiet).setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 RECIPES_DIR.mkdir(parents=True, exist_ok=True)
@@ -80,15 +93,11 @@ def save_recipe(name: str, content: str) -> Path:
 
 def list_recipes() -> list[Path]:
     files = sorted(RECIPES_DIR.glob("*.md"))
-    logger.info(
-        "List recipes scan: dir=%s exists=%s is_dir=%s count=%d",
+    logger.debug(
+        "List recipes scan: dir=%s count=%d",
         RECIPES_DIR,
-        RECIPES_DIR.exists(),
-        RECIPES_DIR.is_dir(),
         len(files),
     )
-    if files:
-        logger.info("List recipes matches: %s", [f.name for f in files])
     return files
 
 
@@ -99,8 +108,6 @@ def load_all_recipes() -> str:
     parts = []
     for f in files:
         parts.append(f"### {f.stem.replace('_', ' ').title()}\n{f.read_text(encoding='utf-8')}")
-
-        print("loaded_recipes: ", parts)
     return "\n\n---\n\n".join(parts)
 
 
