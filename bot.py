@@ -41,9 +41,14 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("🍽 Suggest what to cook"), KeyboardButton("🔍 Search by ingredient")],
         [KeyboardButton("📋 List my recipes"), KeyboardButton("➕ Save a recipe")],
         [KeyboardButton("📓 Journal"), KeyboardButton("✏️ Edit recipe")],
+        [KeyboardButton("📖 Full recipe")],
     ],
     resize_keyboard=True,
     is_persistent=True,
+)
+
+_RECIPE_DISPLAY_FOOTER = (
+    "\n\n📖 Reply with a recipe name to see the full recipe, or tap 📖 Full recipe."
 )
 
 
@@ -143,9 +148,13 @@ async def cmd_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_suggest(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    cid = update.effective_chat.id
     await update.message.reply_text("🤔 Let me look through your recipes…")
     body = await asyncio.to_thread(recipes.load_all_recipes_text)
     reply = await asyncio.to_thread(claude_client.claude_suggest, body)
+    if body.strip():
+        reply = reply + _RECIPE_DISPLAY_FOOTER
+        state.set_mode(cid, state.MODE_AWAITING_RECIPE_DISPLAY)
     await update.message.reply_text(reply, reply_markup=MAIN_KEYBOARD)
 
 
@@ -165,8 +174,9 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
     names = "\n".join(f"• {recipes.stem_display_name(f)}" for f in files)
+    state.set_mode(cid, state.MODE_AWAITING_RECIPE_DISPLAY)
     await update.message.reply_text(
-        f"📋 *Your saved recipes ({len(files)}):*\n\n{names}",
+        f"📋 *Your saved recipes ({len(files)}):*\n\n{names}{_RECIPE_DISPLAY_FOOTER}",
         parse_mode="Markdown",
         reply_markup=MAIN_KEYBOARD,
     )
@@ -176,6 +186,23 @@ async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     tail = await asyncio.to_thread(journal.read_journal_tail, JOURNAL_TAIL_LINES)
     await update.message.reply_text(
         f"📓 *Recent journal*\n\n{tail}",
+        parse_mode="Markdown",
+        reply_markup=MAIN_KEYBOARD,
+    )
+
+
+async def cmd_recipe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    cid = update.effective_chat.id
+    files = await asyncio.to_thread(recipes.list_recipes)
+    if not files:
+        await update.message.reply_text(
+            "You have no saved recipes yet. Use ➕ Save a recipe first.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+    state.set_mode(cid, state.MODE_AWAITING_RECIPE_DISPLAY)
+    await update.message.reply_text(
+        "📖 *Which recipe?* Reply with the name (or part of it), same as in your list.",
         parse_mode="Markdown",
         reply_markup=MAIN_KEYBOARD,
     )
@@ -223,20 +250,22 @@ async def _handle_reminder_natural_language(
                 parse_mode="Markdown",
                 reply_markup=MAIN_KEYBOARD,
             )
-            return True
-        run_at = await asyncio.to_thread(reminders.parse_reminder_datetime, day, th)
-        await asyncio.to_thread(reminders.enqueue_reminder, cid, run_at, rt)
-        await update.message.reply_text(
-            f"⏰ I'll remind you at *{run_at.strftime('%Y-%m-%d %H:%M')}*:\n_{rt}_",
-            parse_mode="Markdown",
-            reply_markup=MAIN_KEYBOARD,
-        )
+        else:
+            run_at = await asyncio.to_thread(reminders.parse_reminder_datetime, day, th)
+            await asyncio.to_thread(reminders.enqueue_reminder, cid, run_at, rt)
+            await update.message.reply_text(
+                f"⏰ I'll remind you at *{run_at.strftime('%Y-%m-%d %H:%M')}*:\n_{rt}_",
+                parse_mode="Markdown",
+                reply_markup=MAIN_KEYBOARD,
+            )
     except Exception as e:
         logger.error("Reminder parse failed: %s", e)
         await update.message.reply_text(
             "Couldn't schedule that reminder. Try rephrasing with a clear time.",
             reply_markup=MAIN_KEYBOARD,
         )
+    finally:
+        state.reset_state(cid)
     return True
 
 
@@ -395,6 +424,26 @@ async def _continue_clarification(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     await _finalize_save(update, ctx, t, c)
 
 
+async def _show_full_recipe_for_text(
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str
+) -> None:
+    cid = update.effective_chat.id
+    path = await asyncio.to_thread(recipes.resolve_recipe_by_user_pick, text)
+    if path is None:
+        await update.message.reply_text(
+            "I couldn't match that to one saved recipe. Check the spelling or use 📋 *List my recipes*, "
+            "then try again (or /cancel).",
+            parse_mode="Markdown",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+    title = recipes.stem_display_name(path)
+    full_md = await asyncio.to_thread(recipes.read_recipe_file, path)
+    state.reset_state(cid)
+    await update.message.reply_text(f"📖 *{title}*", parse_mode="Markdown")
+    await _reply_chunks(update.message, full_md, reply_markup=MAIN_KEYBOARD)
+
+
 async def _apply_edit_and_save(
     update: Update,
     ctx: ContextTypes.DEFAULT_TYPE,
@@ -444,6 +493,8 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         return await cmd_journal(update, ctx)
     if text == "✏️ Edit recipe":
         return await cmd_edit(update, ctx)
+    if text == "📖 Full recipe":
+        return await cmd_recipe(update, ctx)
 
     if mode == state.MODE_AWAITING_RECIPE:
         await update.message.reply_text("⏳ Parsing your recipe…")
@@ -471,8 +522,18 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(f"🔍 Searching for recipes with *{text}*…", parse_mode="Markdown")
         matches = await asyncio.to_thread(recipes.search_recipes_by_ingredient, text)
         reply = await asyncio.to_thread(claude_client.claude_search, text, matches)
-        state.reset_state(cid)
+        if matches:
+            reply = reply + _RECIPE_DISPLAY_FOOTER
+            state.set_mode(cid, state.MODE_AWAITING_RECIPE_DISPLAY)
+        else:
+            state.reset_state(cid)
         await update.message.reply_text(reply, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        return
+
+    if mode == state.MODE_AWAITING_RECIPE_DISPLAY:
+        if _looks_like_reminder(text):
+            return await _handle_reminder_natural_language(update, ctx, text)
+        await _show_full_recipe_for_text(update, ctx, text)
         return
 
     if mode == state.MODE_AWAITING_MORNING_REPLY:
@@ -512,7 +573,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 
     await update.message.reply_text(
         "Use the buttons below, or try:\n"
-        "/suggest  /save  /search  /list  /journal  /edit  /cancel\n\n"
+        "/suggest  /save  /search  /list  /recipe  /journal  /edit  /cancel\n\n"
         "You can also say *remind me to … at …* in natural language.",
         parse_mode="Markdown",
         reply_markup=MAIN_KEYBOARD,
@@ -555,6 +616,7 @@ def main() -> None:
     app.add_handler(CommandHandler("suggest", cmd_suggest))
     app.add_handler(CommandHandler("search", cmd_search))
     app.add_handler(CommandHandler("list", cmd_list))
+    app.add_handler(CommandHandler("recipe", cmd_recipe))
     app.add_handler(CommandHandler("journal", cmd_journal))
     app.add_handler(CommandHandler("edit", cmd_edit))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

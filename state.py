@@ -42,6 +42,7 @@ MODE_AWAITING_INGREDIENT = "awaiting_ingredient"
 MODE_AWAITING_MORNING_REPLY = "awaiting_morning_reply"
 MODE_AWAITING_EDIT_PICK = "awaiting_edit_pick"
 MODE_AWAITING_EDIT_INSTRUCTION = "awaiting_edit_instruction"
+MODE_AWAITING_RECIPE_DISPLAY = "awaiting_recipe_display"
 
 KEY_CLAR_TITLE = "clar_title"
 KEY_CLAR_CONTENT = "clar_content"
