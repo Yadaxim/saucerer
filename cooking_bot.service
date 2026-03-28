@@ -1,0 +1,19 @@
+[Unit]
+Description=Telegram Cooking Assistant Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=adair
+Group=adair
+EnvironmentFile=/home/adair/Coding/LLMCookAssistant/.env
+ExecStart=/home/adair/Coding/LLMCookAssistant/.venv/bin/python /home/adair/Coding/LLMCookAssistant/cooking_bot.py
+WorkingDirectory=/home/adair/Coding/LLMCookAssistant
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
