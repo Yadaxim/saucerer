@@ -103,16 +103,24 @@ def send_morning_prompt() -> None:
         return
 
     async def _send():
-        state.set_mode(YOUR_CHAT_ID, state.MODE_AWAITING_MORNING_REPLY)
+        reminders.cancel_morning_nudges_for_chat(YOUR_CHAT_ID)
+        today_iso = datetime.now().date().isoformat()
+        state.set_mode(
+            YOUR_CHAT_ID,
+            state.MODE_AWAITING_MORNING_REPLY,
+            morning_flow_date=today_iso,
+        )
         await app.bot.send_message(
             chat_id=YOUR_CHAT_ID,
             text=(
                 "☀️ Good morning! What are you planning to cook today?\n\n"
-                "_(Reply here, or pick an option below)_"
+                "_(Reply with a dish, say you are not cooking, or use the buttons. "
+                "If you are quiet, I will ask again every 30 minutes until 2pm.)_"
             ),
             parse_mode="Markdown",
             reply_markup=MAIN_KEYBOARD,
         )
+        reminders.schedule_next_morning_nudge(YOUR_CHAT_ID, today_iso)
 
     try:
         asyncio.run_coroutine_threadsafe(_send(), loop)
@@ -272,6 +280,21 @@ async def _handle_reminder_natural_language(
 async def _handle_morning_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     cid = update.effective_chat.id
     dish = text.strip()
+
+    try:
+        classified = await asyncio.to_thread(claude_client.claude_classify_morning_reply, dish)
+        intent = classified.get("intent", "cooking")
+    except Exception as e:
+        logger.error("Morning reply classify failed: %s", e)
+        intent = "cooking"
+
+    if intent == "not_cooking":
+        state.reset_state(cid)
+        await update.message.reply_text(
+            "Got it — no cooking at home today. Enjoy your day! 👋",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
 
     path = await asyncio.to_thread(recipes.find_recipe_path_by_dish_name, dish)
     if path is None:
@@ -600,6 +623,7 @@ def main() -> None:
             "Set TELEGRAM_TOKEN and ANTHROPIC_API_KEY in a .env file (see .env.example)."
         )
 
+    reminders.set_morning_reply_keyboard(MAIN_KEYBOARD)
     reminders.configure_daily_morning(MORNING_TIME, send_morning_prompt)
     reminders.start_scheduler_thread()
 

@@ -19,15 +19,30 @@ def get_state(chat_id: int) -> dict[str, Any]:
 
 
 def reset_state(chat_id: int) -> None:
+    st = get_state(chat_id)
+    if st.get("mode") == MODE_AWAITING_MORNING_REPLY:
+        _cancel_morning_nudges_if_loaded(chat_id)
     _states[chat_id] = new_idle_state()
 
 
 def set_mode(chat_id: int, mode: str, **extra: Any) -> None:
     st = get_state(chat_id)
+    old_mode = st.get("mode")
+    if old_mode == MODE_AWAITING_MORNING_REPLY and mode != MODE_AWAITING_MORNING_REPLY:
+        _cancel_morning_nudges_if_loaded(chat_id)
     st.clear()
     st["mode"] = mode
     for k, v in extra.items():
         st[k] = v
+
+
+def _cancel_morning_nudges_if_loaded(chat_id: int) -> None:
+    try:
+        import reminders
+
+        reminders.cancel_morning_nudges_for_chat(chat_id)
+    except Exception:
+        pass
 
 
 def merge_state(chat_id: int, **extra: Any) -> None:
@@ -52,3 +67,5 @@ KEY_CLAR_LAST_QUESTION = "clar_last_question"
 KEY_EDIT_PATH = "edit_path"
 KEY_EDIT_TITLE = "edit_title"
 KEY_EDIT_CONTENT = "edit_content"
+
+KEY_MORNING_FLOW_DATE = "morning_flow_date"

@@ -191,6 +191,30 @@ def claude_parse_reminder(user_text: str, now_local_hint: str) -> dict[str, str]
     return json.loads(raw_json)
 
 
+def claude_classify_morning_reply(user_text: str) -> dict[str, Any]:
+    """
+    Classify reply to 'what are you cooking today?'
+    JSON: {"intent": "not_cooking"} or {"intent": "cooking"}
+    not_cooking = user declines, no meal planned, takeout only, etc.
+    """
+    response = get_client().messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=120,
+        system=(
+            "The user answered a question about what they plan to cook today. "
+            'Decide if they are declining / not cooking at home (takeout, fasting, "nothing", "not today", etc.) '
+            'vs naming or implying a dish they will cook. '
+            'Respond ONLY with JSON: {"intent":"not_cooking"} or {"intent":"cooking"}. No markdown fences.'
+        ),
+        messages=[{"role": "user", "content": user_text}],
+    )
+    raw_json = _strip_json_fence(response.content[0].text)
+    data = json.loads(raw_json)
+    if data.get("intent") not in ("not_cooking", "cooking"):
+        raise ValueError("Invalid morning intent")
+    return data
+
+
 def claude_match_morning_dish(dish: str, recipe_names: list[str]) -> dict[str, Any]:
     """
     Pick best matching recipe name from list, or none. JSON:

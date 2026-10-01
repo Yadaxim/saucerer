@@ -19,6 +19,10 @@ RECIPES_DIR = Path(os.path.expanduser(os.getenv("RECIPES_DIR", "~/recipes"))).ex
 JOURNAL_PATH = RECIPES_DIR / "journal.md"
 
 MORNING_TIME = os.getenv("MORNING_TIME", "10:00").strip()
+_giveup = os.getenv("MORNING_GIVEUP_TIME", "14:00").strip().split(":")
+MORNING_GIVEUP_HOUR = int(_giveup[0])
+MORNING_GIVEUP_MINUTE = int(_giveup[1]) if len(_giveup) > 1 else 0
+MORNING_NUDGE_INTERVAL_MINUTES = int(os.getenv("MORNING_NUDGE_INTERVAL_MINUTES", "30"))
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
 
 _log_path = Path(os.getenv("BOT_LOG_FILE", str(BASE_DIR / "cooking_bot.log")))

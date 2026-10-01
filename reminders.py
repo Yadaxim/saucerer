@@ -6,17 +6,24 @@ import asyncio
 import logging
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as time_of_day, timedelta
 
 import schedule
 
-from config import SCHEDULER_POLL_SECONDS
+import state as chat_state
+from config import (
+    MORNING_GIVEUP_HOUR,
+    MORNING_GIVEUP_MINUTE,
+    MORNING_NUDGE_INTERVAL_MINUTES,
+    SCHEDULER_POLL_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
 _app_ref = None
 _main_loop: asyncio.AbstractEventLoop | None = None
 _pending_reminders: list[dict] = []  # {when: datetime, chat_id: int, text: str}
+_morning_nudges: list[dict] = []  # {when: datetime, chat_id: int, flow_date: str ISO date}
 _morning_job = None
 _morning_time_str = "10:00"
 
@@ -44,6 +51,41 @@ def enqueue_reminder(chat_id: int, run_at: datetime, reminder_text: str) -> None
     logger.info("Queued reminder chat_id=%s at %s", chat_id, run_at)
 
 
+def enqueue_morning_nudge(chat_id: int, run_at: datetime, flow_date_iso: str) -> None:
+    _morning_nudges.append(
+        {"when": run_at, "chat_id": chat_id, "flow_date": flow_date_iso}
+    )
+    logger.info(
+        "Queued morning nudge chat_id=%s at %s flow=%s",
+        chat_id,
+        run_at,
+        flow_date_iso,
+    )
+
+
+def cancel_morning_nudges_for_chat(chat_id: int) -> None:
+    global _morning_nudges
+    before = len(_morning_nudges)
+    _morning_nudges = [n for n in _morning_nudges if n["chat_id"] != chat_id]
+    dropped = before - len(_morning_nudges)
+    if dropped:
+        logger.info("Cancelled %d morning nudge(s) for chat_id=%s", dropped, chat_id)
+
+
+def schedule_next_morning_nudge(chat_id: int, flow_date_iso: str) -> None:
+    """Schedule the next half-hourly prompt if before local give-up time (default 14:00)."""
+    now = datetime.now()
+    if now.date().isoformat() != flow_date_iso:
+        return
+    giveup = datetime.combine(
+        now.date(),
+        time_of_day(MORNING_GIVEUP_HOUR, MORNING_GIVEUP_MINUTE),
+    )
+    next_t = now + timedelta(minutes=MORNING_NUDGE_INTERVAL_MINUTES)
+    if next_t < giveup:
+        enqueue_morning_nudge(chat_id, next_t, flow_date_iso)
+
+
 def _tick_pending_reminders() -> None:
     if _main_loop is None or _app_ref is None:
         return
@@ -63,6 +105,59 @@ def _tick_pending_reminders() -> None:
             asyncio.run_coroutine_threadsafe(send(), _main_loop)
         except Exception as e:
             logger.error("Reminder schedule send failed: %s", e)
+
+    global _morning_nudges
+    due_n = [n for n in _morning_nudges if n["when"] <= now]
+    _morning_nudges = [n for n in _morning_nudges if n["when"] > now]
+    for n in due_n:
+        cid = n["chat_id"]
+        flow_iso = n["flow_date"]
+        st = chat_state.get_state(cid)
+        if st.get("mode") != chat_state.MODE_AWAITING_MORNING_REPLY:
+            continue
+        if st.get(chat_state.KEY_MORNING_FLOW_DATE) != flow_iso:
+            continue
+        if date.today().isoformat() != flow_iso:
+            continue
+        if now >= datetime.combine(
+            now.date(),
+            time_of_day(MORNING_GIVEUP_HOUR, MORNING_GIVEUP_MINUTE),
+        ):
+            continue
+
+        async def send_nudge(chat_id=cid):
+            try:
+                await _app_ref.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "👋 Still there — what are you planning to cook today?\n\n"
+                        "_(Reply with a dish, or say you are not cooking.)_"
+                    ),
+                    parse_mode="Markdown",
+                    reply_markup=_morning_keyboard_placeholder(),
+                )
+            except Exception as e:
+                logger.error("Morning nudge send failed: %s", e)
+
+        try:
+            asyncio.run_coroutine_threadsafe(send_nudge(), _main_loop)
+        except Exception as e:
+            logger.error("Morning nudge schedule failed: %s", e)
+
+        schedule_next_morning_nudge(cid, flow_iso)
+
+
+_morning_keyboard = None
+
+
+def set_morning_reply_keyboard(markup) -> None:
+    """Reply keyboard for morning prompts and nudges (set from bot at startup)."""
+    global _morning_keyboard
+    _morning_keyboard = markup
+
+
+def _morning_keyboard_placeholder():
+    return _morning_keyboard
 
 
 def parse_reminder_datetime(day: str, time_24h: str, now: datetime | None = None) -> datetime:

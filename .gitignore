@@ -6,6 +6,7 @@ __pycache__/
 .Python
 .env
 *.log
+*.log.*
 .pytest_cache/
 .mypy_cache/
 *.egg-info/
